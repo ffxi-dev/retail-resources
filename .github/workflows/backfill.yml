@@ -75,7 +75,7 @@ jobs:
             python3 "$script" list-files
           done | sort -u > all-dats.txt
 
-      - uses: sruon/ffxi-fetch-action@v1
+      - uses: ffxi-dev/ffxi-fetch-action@v1
         with:
           files-from: all-dats.txt
           output-dir: dat

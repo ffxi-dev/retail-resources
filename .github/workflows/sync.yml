@@ -30,7 +30,7 @@ jobs:
           done | sort -u > all-dats.txt
           echo "$(wc -l < all-dats.txt) files to fetch"
 
-      - uses: sruon/ffxi-fetch-action@v1
+      - uses: ffxi-dev/ffxi-fetch-action@v1
         id: ffxi
         with:
           files-from: all-dats.txt

@@ -25,7 +25,7 @@ Install the [FFXI Resources Release Notifier](https://github.com/apps/ffxi-resou
 ```yaml
 on:
   repository_dispatch:
-    types: ["sruon/FFXI-Resources release"]
+    types: ["ffxi-dev/FFXI-Resources release"]
 
 jobs:
   on-release:
