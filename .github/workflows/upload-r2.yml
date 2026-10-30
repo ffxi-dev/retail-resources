@@ -64,22 +64,3 @@ jobs:
       - name: Rebuild versions.json
         run: python3 scripts/r2_upload.py rebuild-index
 
-      # Tell the site a new version is live. Small payload on purpose: the
-      # full release event exceeds the repository_dispatch client_payload limit.
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.NOTIFIER_APP_ID }}
-          private-key: ${{ secrets.NOTIFIER_APP_PRIVATE_KEY }}
-          owner: sruon
-          repositories: res.sruon.dev
-
-      - name: Trigger site deploy
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          gh api repos/sruon/res.sruon.dev/dispatches \
-            -f event_type=ffxi-resources-release \
-            -f "client_payload[tag]=$TAG"
