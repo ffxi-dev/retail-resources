@@ -1,6 +1,6 @@
 # FFXI Resources — Bucket Layout
 
-Public S3-compatible bucket for FFXI client data dumps. Mirrors every release published to [GitHub Releases](https://github.com/sruon/FFXI-Resources/releases) and is the recommended fetch source for automated consumers.
+Public S3-compatible bucket for FFXI client data dumps. Mirrors every release published to [GitHub Releases](https://github.com/ffxi-dev/retail-resources/releases) and is the recommended fetch source for automated consumers.
 
 **Base URL:** `https://ffxi-resources.sruon.dev`
 
