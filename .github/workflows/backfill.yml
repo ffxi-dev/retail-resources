@@ -90,21 +90,12 @@ jobs:
       - name: Upload version artifacts to R2 (no index touch — done after matrix)
         run: python3 scripts/r2_upload.py upload-version "${{ matrix.version }}" dist
 
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.NOTIFIER_APP_ID }}
-          private-key: ${{ secrets.NOTIFIER_APP_PRIVATE_KEY }}
-
       - name: Replace GitHub release
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ matrix.version }}
-        # Skip the upload-r2 trigger by tagging the release notes; we already
-        # uploaded the artifacts inline. The release: published event will fire
-        # upload-r2.yml anyway, but it'll just re-upload the same bytes and run
-        # rebuild-index — harmless.
+        # The artifacts were uploaded above and finalize rebuilds the index, so this
+        # release needs to start nothing; GITHUB_TOKEN releases don't.
         run: |
           gh release delete "$VERSION" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$VERSION" \

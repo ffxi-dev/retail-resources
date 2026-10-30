@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   sync:
@@ -53,14 +54,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate app token
-        if: steps.check.outputs.exists == 'false'
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.NOTIFIER_APP_ID }}
-          private-key: ${{ secrets.NOTIFIER_APP_PRIVATE_KEY }}
-
       - name: Create release
         if: steps.check.outputs.exists == 'false'
         run: |
@@ -70,4 +63,11 @@ jobs:
             --notes "Automated dump for FFXI version $VERSION" \
             dist/*
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Releases made with GITHUB_TOKEN start no workflows, but a dispatch does.
+      - name: Upload to R2
+        if: steps.check.outputs.exists == 'false'
+        run: gh workflow run upload-r2.yml -f tag="${{ steps.ffxi.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
