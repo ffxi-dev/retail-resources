@@ -28,7 +28,8 @@ ffxi-resources.sruon.dev/
         ├── zones.{parquet,ndjson.gz,meta.json}
         ├── events.{parquet,ndjson.gz,meta.json}
         ├── events_actors.{parquet,ndjson.gz,meta.json}
-        └── events_scripts.parquet
+        ├── events_scripts.parquet
+        └── client_tables.{json,meta.json}
 ```
 
 Schema for each artifact: see [docs/FORMATS.md](FORMATS.md).

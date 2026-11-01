@@ -37,6 +37,7 @@ Both contain the same data. NDJSON has a sidecar `<name>.meta.json` with `versio
 | `monster_families.{ndjson.gz,parquet}` | Monster family names (singular + plural) |
 | `mob_skills.{ndjson.gz,parquet}` | Mob skill names, by the id the action packet sends |
 | `zone_layout.{ndjson.gz,parquet}` | RID sub-region entries — fishing areas, doors, zonelines, models, elevators, events (one per row) |
+| `client_tables.json` | Lookup tables from `FFXiMain.dll`: which DAT holds a player's models and motions. One JSON object, not rows |
 
 Plus a `<name>.meta.json` for each `.ndjson.gz`:
 
@@ -406,6 +407,48 @@ Mob skill names from ROM/27/80.DAT. Sort: `(id)`. Entry `i` of the DAT is mob sk
 ```json
 {"id": 257, "name": "Foot Kick"}
 ```
+
+---
+
+## client_tables.json
+
+Lookup tables the client keeps in `FFXiMain.dll`'s `.data` section. They say which DAT file holds a player's equipment models and motions. Unlike every other artifact this is one JSON object, one key per table, because each table is a short array indexed by race. Sidecar: `client_tables.meta.json` (`count` is the number of tables).
+
+```json
+{
+  "race_files": {"description": "...", "values": [7072, 7072, 10248, ...]},
+  "battle_skirt": {"description": "...", "values": [[9800, 9928], [9800, 9928], ...]},
+  ...
+}
+```
+
+All values are file ids: resolve them through `FTABLE`/`VTABLE` to a `ROM*/dir/file.DAT` path.
+
+**Race id** is the index into every `values` array: the race the look (GrapIDTbl) carries, 1 hume male, 2 hume female, 3 elvaan male, 4 elvaan female, 5 tarutaru male, 6 tarutaru female, 7 mithra, 8 galka; 29-31 the child NPCs and 32-36 the chocobos. Index 0 copies hume male. Most tables cover only 0-8.
+
+**Skirt kind** comes from byte 9 of the body piece's info block (1 or 2). Each motion table has a `_skirt` partner: a `[kind 1, kind 2]` pair per race, plus the same offset as the main table, holding the motions for the skirt layer.
+
+| Key | Size | File id |
+|---|---|---|
+| `race_files` | 37 u16 | First file of the race's model set. +0 skeleton and lower-body motions, +1 upper-body motions, +3 and +4 the skirt layer for skirt kinds 1 and 2. |
+| `equipment` | 37 entries, null or 9 slots of `[first, count]` runs | Equipment model to file. Slots: 0 face, 1 head, 2 body, 3 hands, 4 legs, 5 feet, 6 main, 7 sub, 8 ranged. Model ids count on through the runs: model `m` is `first + m` in the first run with `m < count`, after subtracting the counts of the runs before it. Null for races 9-28. |
+| `battle` | 9 u16 | Engaged motions with one hand armed: + the main weapon's motion type (byte 3 of its info block). |
+| `dual_main` | 9 u16 | Engaged motions for the main hand when dual wielding: + main weapon motion type. |
+| `dual_off` | 9 u16 | Engaged motions for the off hand when dual wielding: + off-hand weapon motion type. |
+| `emote` | 9 u16 | Emotes: + emote id. |
+| `weaponskill` | 9 u16 | Weapon skills (action category 3), animation id below 256: + animation id. |
+| `weaponskill_high` | 9 u16 | Weapon skills, animation id 256 and up: + animation id − 256. |
+| `dance` | 9 u16 | Dancer moves (action category 14): + animation id. |
+| `rune_fencer` | 9 u32 | Rune Fencer moves (action category 15): + animation id. |
+| `action` | 9 u16 | Other motions: + 1 fishing, + 4 sitting on a chair, + 5 riding a mount. |
+| `fishing_rod` | 9 u16 | Fishing rods: + the ranged slot's model id. No skirt partner. |
+| `<name>_skirt` | 9 pairs, same width as `<name>` | Skirt layer for each motion table above, by skirt kind. |
+
+**How they are found.** Each table is located by its first values, as xim and the in-browser replay do: two equal entries for race 0 and 1 (`9672, 9672` for `battle`), `7072, 7072, 10248` for `race_files`, and the u32 run `7080, 32` (hume male faces) for `equipment`. A `_skirt` table starts at the next 4-byte boundary after its main table. The dump fails if an anchor matches zero or several times, or if a skirt table does not hold larger file ids than its main table.
+
+**Across versions.** Every table except `equipment` is the same from the November 2022 build to October 2026; only the addresses move by a few bytes. `equipment` run counts grow when Square Enix adds models (hume male main-hand and sub run 4 went from 32 to 300 models between November 2022 and September 2025). A much older build, from before Dancer, has no `dance` table.
+
+**What is confirmed.** In the October 2026 build, the client code reads `battle`, `dual_*`, `race_files` and their skirt pairs in one function (`0x100D2D70`/`0x100D2E30`), `weaponskill`, `weaponskill_high`, `dance` and `rune_fencer` by action category in `0x100D25E0`, `emote` in `0x100D1C80`, `action` in `0x100D2A10` and siblings, and `equipment` through a pointer per race at `0x1035F378`. The skirt kind and weapon motion type bytes are copied from the info block of the body and weapon models (`0x100D0B50`). The meanings of `action`'s offsets, `emote`'s index and `fishing_rod` come from xim and are not checked against the client.
 
 ---
 
