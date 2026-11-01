@@ -35,6 +35,7 @@ Both contain the same data. NDJSON has a sidecar `<name>.meta.json` with `versio
 | `merits.{ndjson.gz,parquet}` | Merit names |
 | `augments.{ndjson.gz,parquet}` | Augment template strings |
 | `monster_families.{ndjson.gz,parquet}` | Monster family names (singular + plural) |
+| `mob_skills.{ndjson.gz,parquet}` | Mob skill names, by the id the action packet sends |
 | `zone_layout.{ndjson.gz,parquet}` | RID sub-region entries — fishing areas, doors, zonelines, models, elevators, events (one per row) |
 
 Plus a `<name>.meta.json` for each `.ndjson.gz`:
@@ -394,6 +395,16 @@ Monster family display names. Sort: `(id)`.
 
 ```json
 {"id": 1, "name": "crab", "name_plural": "crabs"}
+```
+
+---
+
+## mob_skills.ndjson.gz / mob_skills.parquet
+
+Mob skill names from ROM/27/80.DAT. Sort: `(id)`. Entry `i` of the DAT is mob skill `256 + i`: the id the action packet (0x028, category 11) sends and LSB's `mob_skills` uses. Unused entries (`.`, `#123`) are left out.
+
+```json
+{"id": 257, "name": "Foot Kick"}
 ```
 
 ---
