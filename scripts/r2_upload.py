@@ -10,7 +10,9 @@ Two subcommands:
   rebuild-index
     Lists versions/*/manifest.json on the bucket, reads each, and writes a
     fresh versions.json to the bucket root. Idempotent; reflects whatever
-    is currently in the bucket. Run once after a batch of uploads.
+    is currently in the bucket. Run once after a batch of uploads. If any
+    manifest cannot be read or parsed, it fails and leaves versions.json
+    as it was.
 
 Reads the same env vars as the workflow steps:
   ENDPOINT, BUCKET, R2_KEY_ID, R2_APP_KEY
@@ -93,20 +95,21 @@ def rebuild_index() -> None:
             if key.endswith("/manifest.json"):
                 manifest_keys.append(key)
 
+    # Publish only an index built from every manifest: skipping one that failed
+    # to read would hide that release from res and Theater until the next rebuild.
     versions = []
     for key in manifest_keys:
         try:
             obj = s3.get_object(Bucket=bucket, Key=key)
             m = json.loads(obj["Body"].read())
-        except (ClientError, json.JSONDecodeError) as e:
-            print(f"  skip {key}: {e}", flush=True)
-            continue
-        versions.append({
-            "version": m["version"],
-            "published_at": m.get("generated_at"),
-            "manifest": key,
-            "file_count": len(m.get("files", {})),
-        })
+            versions.append({
+                "version": m["version"],
+                "published_at": m.get("generated_at"),
+                "manifest": key,
+                "file_count": len(m.get("files", {})),
+            })
+        except (ClientError, ValueError, KeyError, TypeError) as e:
+            raise SystemExit(f"Cannot read {key}: {e!r}; versions.json left unchanged") from e
 
     versions.sort(key=lambda v: v["version"])
     index = {
