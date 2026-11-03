@@ -36,6 +36,7 @@ Both contain the same data. NDJSON has a sidecar `<name>.meta.json` with `versio
 | `augments.{ndjson.gz,parquet}` | Augment template strings |
 | `monster_families.{ndjson.gz,parquet}` | Monster family names (singular + plural) |
 | `mob_skills.{ndjson.gz,parquet}` | Mob skill names, by the id the action packet sends |
+| `battle_messages.{ndjson.gz,parquet}` | Battle messages, by the id 0x028 and 0x029 send, with their blanks as tokens |
 | `quests.{ndjson.gz,parquet}` | Quest names by log and id (one quest per row) |
 | `missions.{ndjson.gz,parquet}` | Mission names by log and id (one mission per row) |
 | `zone_layout.{ndjson.gz,parquet}` | RID sub-region entries — fishing areas, doors, zonelines, models, elevators, events (one per row) |
@@ -409,6 +410,38 @@ Mob skill names from ROM/27/80.DAT. Sort: `(id)`. Entry `i` of the DAT is mob sk
 ```json
 {"id": 257, "name": "Foot Kick"}
 ```
+
+---
+
+## battle_messages.ndjson.gz / battle_messages.parquet
+
+The client's battle messages from ROM/27/72.DAT (POLUtils: English "System Messages (4)", file id 7027). Sort: `(id)`. Entry `i` is message `i`: the id a 0x028 result sends (its message, added-effect message and spike message) and the id 0x029 sends, which LSB names in `xi.msg.basic`. Empty entries, and the Japanese debug lines the English decode garbles, are left out.
+
+```json
+{"id": 1, "text": "{the actor|The |}{actor} {verb actor|hits|hit} {the target|the |}{target} for {number 1} point{plural 1||s} of damage."}
+```
+
+`text` keeps the client's blanks as tokens, `{kind arg}` or `{kind arg|first|second}`; `\n` starts a new line in the chat log. A number arg names a slot: in 0x028, slot 0 is the action's id (the spell, ability or item), 1 the result's value, 2 its added effect's value, 3 its spike value; in 0x029, slots 0 and 1 are its two values.
+
+| Token | Fill with |
+|---|---|
+| `{actor}` / `{target}` | The actor's or target's name |
+| `{the who\|The \|}` | The first text when `who` (actor or target) is a monster, else the second |
+| `{verb who\|hits\|hit}` | The first when `who` is one, the second when many |
+| `{gender who\|his\|her}` | The first when `who` is male, the second when female |
+| `{plural n\|\|s}` | The first when slot `n` is 1, else the second |
+| `{number n}` | Slot `n` |
+| `{tenths n}` | Slot `n` / 10, one decimal ("0.1") |
+| `{gil n}` | Slot `n` and "gil" |
+| `{time n}` | Slot `n` as a time |
+| `{spell n}` | The spell whose `index` is slot `n` |
+| `{weapon_skill n}` | Ability `n` when a player uses it; the monster move (`mob_skills`) when a monster does |
+| `{ability n}` | Ability slot `n` + 512: job abilities follow the 512 weapon skill ids |
+| `{item n}` / `{item_a n}` / `{item_plural n}` | Item `n`: its name, its log name after "a" or "an", its plural log name |
+| `{status n}` / `{status_passive n}` | Status `n`: its name ("Paralysis"), or how a target is said to have it ("paralyzed") |
+| `{keyitem n}` | Key item `n` |
+| `{skill n}` | The combat or craft skill numbered slot `n` |
+| `{table_T n}` / `{value n}` | Slot `n` from a client table no other file publishes (T is its number) |
 
 ---
 
