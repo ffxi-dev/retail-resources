@@ -1,0 +1,31 @@
+# The quest and mission logs. log_id numbers each log as LSB does (xi.questLog, xi.mission.log_id);
+# title is the entry of the menu text DAT that names the log in the client's menus.
+menu: ROM/165/76.DAT
+quests:
+  - {log_id: 0, dat: ROM/176/60.DAT, title: 25}   # San d'Oria
+  - {log_id: 1, dat: ROM/176/61.DAT, title: 26}   # Bastok
+  - {log_id: 2, dat: ROM/176/62.DAT, title: 27}   # Windurst
+  - {log_id: 3, dat: ROM/176/63.DAT, title: 28}   # Jeuno
+  - {log_id: 4, dat: ROM/176/64.DAT, title: 29}   # Other Areas
+  - {log_id: 5, dat: ROM/176/65.DAT, title: 30}   # Outlands
+  - {log_id: 6, dat: ROM/176/66.DAT, title: 136}  # Aht Urhgan
+  - {log_id: 7, dat: ROM/196/6.DAT, title: 145}   # Crystal War
+  - {log_id: 8, dat: ROM/242/64.DAT, title: 156}  # Abyssea
+  - {log_id: 9, dat: ROM/293/70.DAT, title: 160}  # Adoulin
+  - {log_id: 10, dat: ROM/293/71.DAT, title: 163} # Coalition
+missions:
+  - {log_id: 0, dat: ROM/176/67.DAT, title: 21}   # San d'Oria
+  - {log_id: 1, dat: ROM/176/68.DAT, title: 22}   # Bastok
+  - {log_id: 2, dat: ROM/176/69.DAT, title: 23}   # Windurst
+  - {log_id: 3, dat: ROM/176/70.DAT, title: 24}   # Rise of the Zilart
+  - {log_id: 4, dat: ROM/176/73.DAT, title: 135}  # Treasures of Aht Urhgan
+  - {log_id: 5, dat: ROM/196/7.DAT, title: 144}   # Wings of the Goddess
+  - {log_id: 6, dat: ROM/176/71.DAT, title: 131}  # Chains of Promathia
+  - {log_id: 7, dat: ROM/176/72.DAT, title: 134}  # Assault
+  - {log_id: 8, dat: ROM/196/8.DAT, title: 143}   # Campaign
+  - {log_id: 9, dat: ROM/222/18.DAT, title: 152}  # A Crystalline Prophecy
+  - {log_id: 10, dat: ROM/223/12.DAT, title: 153} # A Moogle Kupo d'Etat
+  - {log_id: 11, dat: ROM/223/13.DAT, title: 154} # A Shantotto Ascension
+  - {log_id: 12, dat: ROM/293/69.DAT, title: 159} # Seekers of Adoulin
+  - {log_id: 13, dat: ROM/333/4.DAT, title: 183}  # Rhapsodies of Vana'diel
+  - {log_id: 14, dat: ROM/364/36.DAT, title: 188} # The Voracious Resurgence
