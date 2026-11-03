@@ -36,6 +36,8 @@ Both contain the same data. NDJSON has a sidecar `<name>.meta.json` with `versio
 | `augments.{ndjson.gz,parquet}` | Augment template strings |
 | `monster_families.{ndjson.gz,parquet}` | Monster family names (singular + plural) |
 | `mob_skills.{ndjson.gz,parquet}` | Mob skill names, by the id the action packet sends |
+| `quests.{ndjson.gz,parquet}` | Quest names by log and id (one quest per row) |
+| `missions.{ndjson.gz,parquet}` | Mission names by log and id (one mission per row) |
 | `zone_layout.{ndjson.gz,parquet}` | RID sub-region entries — fishing areas, doors, zonelines, models, elevators, events (one per row) |
 | `client_tables.json` | Lookup tables from `FFXiMain.dll`: which DAT holds a player's models and motions. One JSON object, not rows |
 
@@ -407,6 +409,84 @@ Mob skill names from ROM/27/80.DAT. Sort: `(id)`. Entry `i` of the DAT is mob sk
 ```json
 {"id": 257, "name": "Foot Kick"}
 ```
+
+---
+
+## quests.ndjson.gz / quests.parquet
+
+Quest names from the client's quest log DATs, one per log. Sort: `(log_id, id)`. The id is the quest's bit in the log the 0x056 packet sends (port `0x50 + 8 * log_id` for quests under way, `0x90 + 8 * log_id` for quests done, for logs 0 to 7; Abyssea `0xE0`/`0xE8`, Adoulin `0xF0`/`0xF8`, Coalition `0x100`/`0x108`) and the id LSB uses. The log name comes from the client's menu text (ROM/165/76.DAT), cut before the colon ("Outlands: Current Quests"). Unused slots, which keep a Japanese placeholder name or an empty client line, are left out.
+
+| log_id | log | DAT |
+|---|---|---|
+| 0 | San d'Oria | ROM/176/60.DAT |
+| 1 | Bastok | ROM/176/61.DAT |
+| 2 | Windurst | ROM/176/62.DAT |
+| 3 | Jeuno | ROM/176/63.DAT |
+| 4 | Other Areas | ROM/176/64.DAT |
+| 5 | Outlands | ROM/176/65.DAT |
+| 6 | Aht Urhgan | ROM/176/66.DAT |
+| 7 | Crystal War | ROM/196/6.DAT |
+| 8 | Abyssea | ROM/242/64.DAT |
+| 9 | Adoulin | ROM/293/70.DAT |
+| 10 | Coalition | ROM/293/71.DAT |
+
+```json
+{"log_id": 0, "log": "San d'Oria", "id": 110, "name": "Spice Gals", "repeatable": true, "description": "Client: Rouva (Victory Square,
+ Southern San d'Oria)
+Summary:
+ ..."}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `log_id` | int | The log, numbered as LSB's `xi.questLog` |
+| `log` | string | The log's name in the client's menus |
+| `id` | int | The quest within its log |
+| `name` | string | Without the leading `+` the client writes before some names |
+| `repeatable` | bool | The client writes `+` before the name: quests that can be done again (Trial by Earth, Eco-Warrior) |
+| `description` | string | The quest log's text: client and summary, with the client's line breaks |
+
+Primary key: `(log_id, id)`.
+
+---
+
+## missions.ndjson.gz / missions.parquet
+
+Mission names from the client's mission log DATs, one per log. Sort: `(log_id, id)`. The id is the value the 0x056 packet sends: a bit index in the logs it keeps as bits (nation and Zilart missions done, ToAU and WotG, Campaign), else the current mission's number. Seekers of Adoulin and Rhapsodies of Vana'diel number from 110 as the packet does; LSB stores SoA as `(id - 110) / 2` and RoV as `id - 108`. Chains of Promathia and the later logs nest steps under chapters, written with `__` per level; a chapter that shares its first step's id gives way to the step. Placeholders are left out as for quests.
+
+| log_id | log | DAT |
+|---|---|---|
+| 0 | San d'Oria | ROM/176/67.DAT |
+| 1 | Bastok | ROM/176/68.DAT |
+| 2 | Windurst | ROM/176/69.DAT |
+| 3 | Rise of the Zilart | ROM/176/70.DAT |
+| 4 | Treasures of Aht Urhgan | ROM/176/73.DAT |
+| 5 | Wings of the Goddess | ROM/196/7.DAT |
+| 6 | Chains of Promathia | ROM/176/71.DAT |
+| 7 | Assault | ROM/176/72.DAT |
+| 8 | Campaign | ROM/196/8.DAT |
+| 9 | A Crystalline Prophecy | ROM/222/18.DAT |
+| 10 | A Moogle Kupo d'Etat | ROM/223/12.DAT |
+| 11 | A Shantotto Ascension | ROM/223/13.DAT |
+| 12 | Seekers of Adoulin | ROM/293/69.DAT |
+| 13 | Rhapsodies of Vana'diel | ROM/333/4.DAT |
+| 14 | The Voracious Resurgence | ROM/364/36.DAT |
+
+```json
+{"log_id": 13, "log": "Rhapsodies of Vana'diel", "id": 110, "name": "Resonance", "depth": 1, "description": "Mission Orders:
+ ..."}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `log_id` | int | The log, numbered as LSB's `xi.mission.log_id` (TVR 14) |
+| `log` | string | The log's name in the client's menus |
+| `id` | int | The mission within its log |
+| `name` | string | Without the `__` that nests it |
+| `depth` | int | 0 for a chapter or a flat log's mission, 1 for a step, 2 for a step within a step |
+| `description` | string | The mission orders, with the client's line breaks |
+
+Primary key: `(log_id, id)`.
 
 ---
 
