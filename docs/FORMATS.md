@@ -164,12 +164,11 @@ One row per zone. Sort: `(id)`.
 
 ## keyitems.ndjson.gz
 
-One row per key item. Sort: `(id)`.
+One row per key item. Sort: `(id)`. `schema_version` 2: `id` is the key item id the server sends. In version 1 it was the entry's position in `ROM/175/35.DAT`, and the real id sat in `icon_id`.
 
 ```json
 {
-  "id": 100,
-  "icon_id": 111,
+  "id": 111,
   "category": 2,
   "name": "moon crystal",
   "name_plural": "moon crystals",
@@ -179,8 +178,7 @@ One row per key item. Sort: `(id)`.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | int | Key item ID |
-| `icon_id` | int | Icon resource reference |
+| `id` | int | Key item id, as the server sends it and LSB numbers it. The entry's first number |
 | `category` | int | Category number (raw) |
 | `name` / `name_plural` | string | Singular and plural display forms |
 | `description` | string | Full description text |

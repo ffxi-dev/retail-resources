@@ -22,8 +22,37 @@ def _num(entry: dict) -> int:
     return entry.get("number", 0) if isinstance(entry, dict) else 0
 
 
+def rows(lists: dict) -> list[dict]:
+    """Key item rows from parse_dmsg_table's lists.
+
+    A list's key is its position in the DAT, which is sorted for the key item menu.
+    The key item id the server sends is the list's first number. Id 0 marks the
+    placeholder entry and the menu's section headers ("-Temporary Key Items").
+    """
+    out = []
+    for entries in lists.values():
+        if not isinstance(entries, list) or len(entries) < 7:
+            continue
+        kid = _num(entries[0])
+        name = _str(entries[4])
+        if not kid or not name:
+            continue
+        out.append({
+            "id": kid,
+            "category": _num(entries[1]),
+            "name": name,
+            "name_plural": _str(entries[5]),
+            "description": _str(entries[6]),
+        })
+    out.sort(key=lambda r: r["id"])
+    ids = [r["id"] for r in out]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate key item ids")
+    return out
+
+
 class KeyItemDumper(DumpScript):
-    """FFXI key item dumper — name, plural, description, icon and category numbers."""
+    """FFXI key item dumper: id, category number, name, plural, description."""
     produces = ["keyitems"]
 
     def __init__(self):
@@ -34,31 +63,13 @@ class KeyItemDumper(DumpScript):
         return [self.spec["dat"]]
 
     def dump(self, version: str, base_path: str, output_dir: str):
-        data = parse_dmsg_table(os.path.join(base_path, self.spec["dat"]))
-        rows = []
-        for k, entries in data["lists"].items():
-            kid = int(k)
-            if not isinstance(entries, list) or len(entries) < 7:
-                continue
-            name = _str(entries[4])
-            if not name:
-                continue
-            rows.append({
-                "id": kid,
-                "icon_id": _num(entries[0]),
-                "category": _num(entries[1]),
-                "name": name,
-                "name_plural": _str(entries[5]),
-                "description": _str(entries[6]),
-            })
+        out = rows(parse_dmsg_table(os.path.join(base_path, self.spec["dat"]))["lists"])
+        logger.info("Parsed {} key items", len(out))
 
-        rows.sort(key=lambda r: r["id"])
-        logger.info("Parsed {} key items", len(rows))
-
-        meta = {"version": version, "schema_version": 1}
-        write_ndjson_gz(rows, os.path.join(output_dir, "keyitems.ndjson.gz"), meta=meta)
+        meta = {"version": version, "schema_version": 2}
+        write_ndjson_gz(out, os.path.join(output_dir, "keyitems.ndjson.gz"), meta=meta)
         write_parquet(
-            rows, os.path.join(output_dir, "keyitems.parquet"),
+            out, os.path.join(output_dir, "keyitems.parquet"),
             sort_by=["id"], row_group_size=1_000,
         )
 
