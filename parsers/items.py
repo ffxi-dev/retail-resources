@@ -1,6 +1,7 @@
 import base64
 import os
 import struct
+from types import SimpleNamespace
 
 import construct as cs
 from loguru import logger
@@ -41,113 +42,112 @@ from models.items import (
     GeneralItem,
 )
 
-RECORD_SIZE = 0x1400  # 0xC00 before the Sep 2026 client; tail past the icon is zero padding
-FIELDS_OFFSET = 0x10
 ICON_OFFSET = 0x280
 FUD_FIRST_ENTRY = 0x170
 
 FURNITURE_PLACEMENT = {0x01: "CanBeHung", 0x02: "CanBePut", 0x04: "CanPutOn"}
 
-# Construct schemas
 
-ItemHeader = cs.Struct(
-    "id" / cs.Int16ul,
-    cs.Padding(2),
-    "flags" / cs.Int16ul,
-    cs.Padding(2),
-    "stack_size" / cs.Int16ul,
-    "item_type" / cs.Int16ul,
-    "resource_id" / cs.Int16ul,
-    "valid_targets" / cs.Int16ul,
-)
+def _layout(new: bool) -> SimpleNamespace:
+    """The Sep 2026 client grew records from 0xC00 to 0x1400 and padded some fields to 4 bytes."""
+    pad = cs.Padding(2) if new else cs.Pass
+    return SimpleNamespace(
+        record=0x1400 if new else 0xC00,
+        fields=0x10 if new else 0x0E,
+        header=cs.Struct(
+            "id" / cs.Int16ul,
+            cs.Padding(2),
+            "flags" / cs.Int16ul,
+            pad,
+            "stack_size" / cs.Int16ul,
+            "item_type" / cs.Int16ul,
+            "resource_id" / cs.Int16ul,
+            "valid_targets" / cs.Int16ul,
+        ),
+        weapon=cs.Struct(
+            "level" / cs.Int16ul,
+            "slots" / cs.Int16ul,
+            "races" / cs.Int16ul,
+            pad,
+            "jobs" / cs.Int32ul,
+            "superior_level" / cs.Int8ul,
+            cs.Padding(1),
+            "shield_size" / cs.Int16ul,
+            "damage" / cs.Int16ul,
+            "delay" / cs.Int16sl,
+            "dps" / cs.Int16ul,
+            "skill_type" / cs.Int8ul,
+            "jug_size" / cs.Int8ul,
+            "emote" / cs.Int32ul,
+            "max_charges" / cs.Int8ul,
+            "cast_time_raw" / cs.Int8ul,
+            "cast_delay" / cs.Int16ul,
+            "recast_delay" / cs.Int32ul,
+            "unknown1" / cs.Int16ul,
+            "item_level" / cs.Int8ul,
+            "unknown2" / cs.Int8ul,
+            "unknown3" / cs.Int32ul,
+        ),
+        armor=cs.Struct(
+            "level" / cs.Int16ul,
+            "slots" / cs.Int16ul,
+            "races" / cs.Int16ul,
+            pad,
+            "jobs" / cs.Int32ul,
+            "superior_level" / cs.Int8ul,
+            cs.Padding(1),
+            "shield_size" / cs.Int16ul,
+            "max_charges" / cs.Int8ul,
+            "cast_time_raw" / cs.Int8ul,
+            "cast_delay" / cs.Int16ul,
+            "recast_delay" / cs.Int32ul,
+            "unknown1" / cs.Int16ul,
+            "item_level" / cs.Int8ul,
+            "unknown2" / cs.Int8ul,
+            "unknown3" / cs.Int32ul,
+        ),
+        furnishing=cs.Struct(
+            "element" / cs.Int16ul,
+            "storage" / cs.Int32ul,
+            "unknown3" / cs.Int32ul,
+        ),
+        usable=cs.Struct(
+            "cast_time_raw" / cs.Int16ul,
+            "unknown1" / cs.Int32ul,
+            "unknown2" / cs.Int32ul,
+            "unknown3" / (cs.Int16ul if new else cs.Int32ul),
+        ),
+        puppet=cs.Struct(
+            "slot" / cs.Int16ul,
+            pad,
+            "element_charge" / cs.Int32ul,
+            "unknown1" / cs.Int32ul,
+        ),
+        instinct=cs.Struct(
+            "unknown1" / cs.Int32ul,
+            "unknown2" / cs.Int32ul,
+            "unknown3" / cs.Int16ul,
+            "instinct_cost" / cs.Int16ul,
+            "unknown4" / cs.Int16ul,
+            "unknown5" / cs.Int32ul,
+            "unknown6" / cs.Int32ul,
+            "unknown7" / cs.Int32ul,
+        ),
+        slip=cs.Struct(
+            "unknown1" / cs.Int16ul,
+            "unknown2" / (cs.Int16ul if new else cs.Int32ul),
+            "unknowns" / cs.Array(16, cs.Int32ul),
+        ),
+        monipulator=cs.Struct(
+            "unknown1" / cs.Int16ul,
+            "unknowns_a" / cs.Array(8, cs.Int32ul),
+            pad,
+            "unknowns_b" / cs.Array(16, cs.Int32ul),
+        ),
+    )
 
-WeaponFields = cs.Struct(
-    "level" / cs.Int16ul,
-    "slots" / cs.Int16ul,
-    "races" / cs.Int16ul,
-    cs.Padding(2),
-    "jobs" / cs.Int32ul,
-    "superior_level" / cs.Int8ul,
-    cs.Padding(1),
-    "shield_size" / cs.Int16ul,
-    "damage" / cs.Int16ul,
-    "delay" / cs.Int16sl,
-    "dps" / cs.Int16ul,
-    "skill_type" / cs.Int8ul,
-    "jug_size" / cs.Int8ul,
-    "emote" / cs.Int32ul,
-    "max_charges" / cs.Int8ul,
-    "cast_time_raw" / cs.Int8ul,
-    "cast_delay" / cs.Int16ul,
-    "recast_delay" / cs.Int32ul,
-    "unknown1" / cs.Int16ul,
-    "item_level" / cs.Int8ul,
-    "unknown2" / cs.Int8ul,
-    "unknown3" / cs.Int32ul,
-)
 
-ArmorFields = cs.Struct(
-    "level" / cs.Int16ul,
-    "slots" / cs.Int16ul,
-    "races" / cs.Int16ul,
-    cs.Padding(2),
-    "jobs" / cs.Int32ul,
-    "superior_level" / cs.Int8ul,
-    cs.Padding(1),
-    "shield_size" / cs.Int16ul,
-    "max_charges" / cs.Int8ul,
-    "cast_time_raw" / cs.Int8ul,
-    "cast_delay" / cs.Int16ul,
-    "recast_delay" / cs.Int32ul,
-    "unknown1" / cs.Int16ul,
-    "item_level" / cs.Int8ul,
-    "unknown2" / cs.Int8ul,
-    "unknown3" / cs.Int32ul,
-)
-
-FurnishingFields = cs.Struct(
-    "element" / cs.Int16ul,
-    "storage" / cs.Int32ul,
-    "unknown3" / cs.Int32ul,
-)
-
-UsableFields = cs.Struct(
-    "cast_time_raw" / cs.Int16ul,
-    "unknown1" / cs.Int32ul,
-    "unknown2" / cs.Int32ul,
-    "unknown3" / cs.Int16ul,
-)
-
-PuppetFields = cs.Struct(
-    "slot" / cs.Int16ul,
-    cs.Padding(2),
-    "element_charge" / cs.Int32ul,
-    "unknown1" / cs.Int32ul,
-)
-
-InstinctFields = cs.Struct(
-    "unknown1" / cs.Int32ul,
-    "unknown2" / cs.Int32ul,
-    "unknown3" / cs.Int16ul,
-    "instinct_cost" / cs.Int16ul,
-    "unknown4" / cs.Int16ul,
-    "unknown5" / cs.Int32ul,
-    "unknown6" / cs.Int32ul,
-    "unknown7" / cs.Int32ul,
-)
-
-SlipFields = cs.Struct(
-    "unknown1" / cs.Int16ul,
-    "unknown2" / cs.Int16ul,
-    "unknowns" / cs.Array(16, cs.Int32ul),
-)
-
-MonipulatorFields = cs.Struct(
-    "unknown1" / cs.Int16ul,
-    "unknowns_a" / cs.Array(8, cs.Int32ul),
-    cs.Padding(2),
-    "unknowns_b" / cs.Array(16, cs.Int32ul),
-)
+LAYOUTS = {lay.record: lay for lay in (_layout(True), _layout(False))}
 
 FudEntry = cs.Struct(
     "info" / cs.Int16ul,
@@ -300,8 +300,8 @@ def _build_charges(fields) -> ChargeData | None:
     )
 
 
-def _build_weapon(dec: bytes) -> WeaponData:
-    f = WeaponFields.parse(dec[FIELDS_OFFSET:])
+def _build_weapon(dec: bytes, lay: SimpleNamespace) -> WeaponData:
+    f = lay.weapon.parse(dec[lay.fields:])
     slots = decode_bitmask(f.slots, EQUIPMENT_SLOTS, 0, 16)
     races = decode_bitmask(f.races, RACES, 1, 9)
     jobs = decode_bitmask(f.jobs, JOBS, 1, 23)
@@ -336,8 +336,8 @@ def _build_weapon(dec: bytes) -> WeaponData:
     )
 
 
-def _build_armor(dec: bytes) -> ArmorData:
-    f = ArmorFields.parse(dec[FIELDS_OFFSET:])
+def _build_armor(dec: bytes, lay: SimpleNamespace) -> ArmorData:
+    f = lay.armor.parse(dec[lay.fields:])
     return ArmorData(
         level=f.level,
         slots=decode_bitmask(f.slots, EQUIPMENT_SLOTS, 0, 16),
@@ -353,8 +353,8 @@ def _build_armor(dec: bytes) -> ArmorData:
     )
 
 
-def _build_furnishing(dec: bytes, item_id: int, furniture_properties: dict) -> FurnishingData:
-    f = FurnishingFields.parse(dec[FIELDS_OFFSET:])
+def _build_furnishing(dec: bytes, lay: SimpleNamespace, item_id: int, furniture_properties: dict) -> FurnishingData:
+    f = lay.furnishing.parse(dec[lay.fields:])
     props = furniture_properties.get(item_id, {})
     return FurnishingData(
         element=ELEMENTS.get(f.element, str(f.element)),
@@ -364,8 +364,8 @@ def _build_furnishing(dec: bytes, item_id: int, furniture_properties: dict) -> F
     )
 
 
-def _build_usable(dec: bytes) -> UsableData:
-    f = UsableFields.parse(dec[FIELDS_OFFSET:])
+def _build_usable(dec: bytes, lay: SimpleNamespace) -> UsableData:
+    f = lay.usable.parse(dec[lay.fields:])
     return UsableData(
         cast_time=f.cast_time_raw / 4.0 if f.cast_time_raw else None,
         unknown1=f.unknown1 or None,
@@ -374,8 +374,8 @@ def _build_usable(dec: bytes) -> UsableData:
     )
 
 
-def _build_puppet(dec: bytes) -> PuppetData:
-    f = PuppetFields.parse(dec[FIELDS_OFFSET:])
+def _build_puppet(dec: bytes, lay: SimpleNamespace) -> PuppetData:
+    f = lay.puppet.parse(dec[lay.fields:])
     return PuppetData(
         slot=f.slot,
         element_charge=f.element_charge,
@@ -383,8 +383,8 @@ def _build_puppet(dec: bytes) -> PuppetData:
     )
 
 
-def _build_instinct(dec: bytes) -> InstinctData:
-    f = InstinctFields.parse(dec[FIELDS_OFFSET:])
+def _build_instinct(dec: bytes, lay: SimpleNamespace) -> InstinctData:
+    f = lay.instinct.parse(dec[lay.fields:])
     return InstinctData(
         instinct_cost=f.instinct_cost,
         unknown1=f.unknown1 or None,
@@ -397,13 +397,13 @@ def _build_instinct(dec: bytes) -> InstinctData:
     )
 
 
-def _build_slip(dec: bytes) -> SlipData:
-    f = SlipFields.parse(dec[FIELDS_OFFSET:])
+def _build_slip(dec: bytes, lay: SimpleNamespace) -> SlipData:
+    f = lay.slip.parse(dec[lay.fields:])
     return SlipData(unknown1=f.unknown1 or None, unknowns=[f.unknown2, *f.unknowns])
 
 
-def _build_monipulator(dec: bytes) -> MonipulatorData:
-    f = MonipulatorFields.parse(dec[FIELDS_OFFSET:])
+def _build_monipulator(dec: bytes, lay: SimpleNamespace) -> MonipulatorData:
+    f = lay.monipulator.parse(dec[lay.fields:])
     return MonipulatorData(unknown1=f.unknown1 or None, unknowns=[*f.unknowns_a, *f.unknowns_b])
 
 
@@ -421,8 +421,8 @@ def _build_names(dec: bytes, dec_ja: bytes | None) -> tuple[ItemName, ItemDescri
     )
 
 
-def parse_item(dec: bytes, dec_ja: bytes | None, furniture_properties: dict) -> AnyItem | None:
-    header = ItemHeader.parse(dec)
+def parse_item(dec: bytes, dec_ja: bytes | None, furniture_properties: dict, lay: SimpleNamespace) -> AnyItem | None:
+    header = lay.header.parse(dec)
 
     if header.id == 0:
         return None
@@ -446,25 +446,25 @@ def parse_item(dec: bytes, dec_ja: bytes | None, furniture_properties: dict) -> 
     )
 
     if category == "weapon":
-        return WeaponItem(**base, category="weapon", weapon=_build_weapon(dec))
+        return WeaponItem(**base, category="weapon", weapon=_build_weapon(dec, lay))
     if category == "armor":
-        return ArmorItem(**base, category="armor", armor=_build_armor(dec))
+        return ArmorItem(**base, category="armor", armor=_build_armor(dec, lay))
     if header.item_type == 10:
         return FurnishingItem(
             **base,
             category="furnishing",
-            furnishing=_build_furnishing(dec, header.id, furniture_properties),
+            furnishing=_build_furnishing(dec, lay, header.id, furniture_properties),
         )
     if category == "puppet":
-        return PuppetItem(**base, category="puppet", puppet=_build_puppet(dec))
+        return PuppetItem(**base, category="puppet", puppet=_build_puppet(dec, lay))
     if category == "instinct":
-        return InstinctItem(**base, category="instinct", instinct=_build_instinct(dec))
+        return InstinctItem(**base, category="instinct", instinct=_build_instinct(dec, lay))
     if category == "slip":
-        return SlipItem(**base, category="slip", slip=_build_slip(dec))
+        return SlipItem(**base, category="slip", slip=_build_slip(dec, lay))
     if category == "monipulator":
-        return MonipulatorItem(**base, category="monipulator", monipulator=_build_monipulator(dec))
+        return MonipulatorItem(**base, category="monipulator", monipulator=_build_monipulator(dec, lay))
     if category == "usable" or (header.flags & (1 << 9)):
-        return UsableItem(**base, category="usable", usable=_build_usable(dec))
+        return UsableItem(**base, category="usable", usable=_build_usable(dec, lay))
 
     return GeneralItem(**base, category="general")
 
@@ -487,21 +487,22 @@ def parse_all_items(base_path: str, dat_spec: dict) -> list[AnyItem]:
             continue
 
         file_size = os.path.getsize(dat_en_path)
-        num_records = min(max_count, file_size // RECORD_SIZE)
+        lay = LAYOUTS[0x1400 if file_size >= max_count * 0x1400 else 0xC00]
+        num_records = min(max_count, file_size // lay.record)
 
         if not os.path.exists(dat_ja_path):
             raise FileNotFoundError(f"JP DAT not found: {dat_ja_path}")
 
         with open(dat_en_path, "rb") as f_en, open(dat_ja_path, "rb") as f_ja:
             for i in range(num_records):
-                raw_en = f_en.read(RECORD_SIZE)
-                raw_ja = f_ja.read(RECORD_SIZE)
-                if len(raw_en) < RECORD_SIZE:
+                raw_en = f_en.read(lay.record)
+                raw_ja = f_ja.read(lay.record)
+                if len(raw_en) < lay.record:
                     break
 
                 dec_en = decrypt_record(raw_en)
-                dec_ja = decrypt_record(raw_ja) if len(raw_ja) == RECORD_SIZE else None
-                item = parse_item(dec_en, dec_ja, furniture_properties)
+                dec_ja = decrypt_record(raw_ja) if len(raw_ja) == lay.record else None
+                item = parse_item(dec_en, dec_ja, furniture_properties, lay)
                 if item:
                     items.append(item)
 
