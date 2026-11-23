@@ -37,6 +37,7 @@ Both contain the same data. NDJSON has a sidecar `<name>.meta.json` with `versio
 | `monster_families.{ndjson.gz,parquet}` | Monster family names (singular + plural) |
 | `mob_skills.{ndjson.gz,parquet}` | Mob skill names, by the id the action packet sends |
 | `battle_messages.{ndjson.gz,parquet}` | Battle messages, by the id 0x028 and 0x029 send, with their blanks as tokens |
+| `titles.{ndjson.gz,parquet}` | Player titles, English and Japanese (one title per row) |
 | `quests.{ndjson.gz,parquet}` | Quest names by log and id (one quest per row) |
 | `missions.{ndjson.gz,parquet}` | Mission names by log and id (one mission per row) |
 | `zone_layout.{ndjson.gz,parquet}` | RID sub-region entries — fishing areas, doors, zonelines, models, elevators, events (one per row) |
@@ -440,6 +441,22 @@ The client's battle messages from ROM/27/72.DAT (POLUtils: English "System Messa
 | `{keyitem n}` | Key item `n` |
 | `{skill n}` | The combat or craft skill numbered slot `n` |
 | `{table_T n}` / `{value n}` | Slot `n` from a client table no other file publishes (T is its number) |
+
+---
+
+## titles.ndjson.gz / titles.parquet
+
+Player titles from ROM/180/78.DAT (English, POLUtils file id 55704) and ROM/180/77.DAT (Japanese, file id 55584). Sort: `(id)`. Entry `i` is title `i`: the id the server sends and LSB's `xi.title` uses. Id 0 is `N/A`, what the client shows with no title. Unused slots, which hold `0` or nothing in both languages, are left out. The DATs carry only the name: no category, sort order, price or vendor.
+
+```json
+{"id": 1, "name": "Fodderchief Flayer", "name_ja": "フォッダーチーフ　フレーヤー"}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | int | Title id |
+| `name` | string | English name |
+| `name_ja` | string | Japanese name, as the client writes it (full-width spaces kept) |
 
 ---
 
