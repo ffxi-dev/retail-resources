@@ -1,12 +1,11 @@
 """Publish dumps to R2, used by sync.yml and backfill.yml. Layout: docs/BUCKET.md.
 
-Two subcommands:
+Subcommands:
 
   publish <version> <dist_dir>
     Uploads <dist_dir> as an immutable revision under revisions/<version>/<revision>/, checks every
-    file, copies them to versions/<version>/ for readers of the old layout, and writes
-    versions/<version>/manifest.json last. A rerun skips files already there, so a stopped
-    publish resumes. Safe to run in parallel for different versions.
+    file, and writes versions/<version>/manifest.json last. A rerun skips files already there, so a
+    stopped publish resumes. Safe to run in parallel for different versions.
 
   rebuild-index
     Lists versions/*/manifest.json on the bucket, reads each, and writes a
@@ -17,6 +16,10 @@ Two subcommands:
 
   published <version>
     Exits 0 when versions/<version>/manifest.json exists, 1 when it does not.
+
+  drop-copies [--dry-run]
+    Deletes the copies of a version's files that publish once wrote to versions/<version>/, for each
+    version whose manifest names a revision that holds every file it lists.
 
 Reads the same env vars as the workflow steps:
   ENDPOINT, BUCKET, R2_KEY_ID, R2_APP_KEY; GITHUB_SHA when set
@@ -124,17 +127,6 @@ def publish(version: str, dist_dir: Path) -> str:
     else:
         body = s3.get_object(Bucket=bucket, Key=base + "manifest.json")["Body"].read()
 
-    # Copies for readers of the old layout. They are rewritten in place, so those readers can still
-    # see a mix mid-publish; they go once every consumer reads `base`.
-    for name, info in files.items():
-        s3.copy_object(
-            Bucket=bucket,
-            Key=f"versions/{version}/{name}",
-            CopySource={"Bucket": bucket, "Key": base + name},
-            MetadataDirective="REPLACE",
-            CacheControl=SHORT,
-            Metadata={"sha256": info["sha256"]},
-        )
     s3.put_object(Bucket=bucket, Key=f"versions/{version}/manifest.json", Body=body, ContentType="application/json", CacheControl=SHORT)
     print(f"Published {version} as revision {revision}: {uploaded} of {len(files)} files uploaded", flush=True)
     return revision
@@ -142,6 +134,34 @@ def publish(version: str, dist_dir: Path) -> str:
 
 def published(version: str) -> bool:
     return _head(_client(), os.environ["BUCKET"], f"versions/{version}/manifest.json") is not None
+
+
+def drop_copies(dry_run: bool) -> int:
+    """Delete versions/<version>/<file> but each manifest, once the version's revision holds its files."""
+    bucket = os.environ["BUCKET"]
+    s3 = _client()
+    copies: dict[str, list[str]] = {}
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="versions/"):
+        for obj in page.get("Contents", []) or []:
+            parts = obj["Key"].split("/")
+            if len(parts) == 3 and parts[2] != "manifest.json":
+                copies.setdefault(parts[1], []).append(obj["Key"])
+
+    dropped = 0
+    for version, keys in sorted(copies.items()):
+        m = json.loads(s3.get_object(Bucket=bucket, Key=f"versions/{version}/manifest.json")["Body"].read())
+        base = m.get("base")
+        missing = [n for n, info in m["files"].items() if base is None or _stored_sha256(s3, bucket, base + n) != info["sha256"]]
+        if missing:
+            print(f"  keep {version}: its revision lacks {len(missing)} files ({', '.join(missing[:3])})", flush=True)
+            continue
+        for key in keys:
+            if not dry_run:
+                s3.delete_object(Bucket=bucket, Key=key)
+            dropped += 1
+        print(f"  {'would drop' if dry_run else 'dropped'} {len(keys)} copies of {version} (revision {m['revision']})", flush=True)
+    print(f"{'Would drop' if dry_run else 'Dropped'} {dropped} copies", flush=True)
+    return dropped
 
 
 def rebuild_index() -> None:
@@ -202,6 +222,9 @@ def main() -> None:
     check = sub.add_parser("published", help="Exit 0 when R2 has the version's manifest")
     check.add_argument("version")
 
+    drop = sub.add_parser("drop-copies", help="Delete versions/<version>/<file> once the revision holds them")
+    drop.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args()
     if args.cmd == "publish":
         publish(args.version, Path(args.dist_dir))
@@ -209,6 +232,8 @@ def main() -> None:
         rebuild_index()
     elif args.cmd == "published":
         sys.exit(0 if published(args.version) else 1)
+    elif args.cmd == "drop-copies":
+        drop_copies(args.dry_run)
 
 
 if __name__ == "__main__":

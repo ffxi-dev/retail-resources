@@ -1,0 +1,34 @@
+# Deletes the copies of each version's files that publish once wrote to versions/<version>/, now that every reader
+# takes them from the version's revision. Keeps a version whose revision lacks a file it lists. Run with dry_run
+# first. Design: ffxi-dev/vault openspec/changes/immutable-resources/, stage 4.
+name: Drop old-layout copies
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would go, delete nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  drop:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: r2-index-rebuild
+      cancel-in-progress: false
+    env:
+      ENDPOINT: https://5ab2e190b7cfef75dcbfebcf15b14352.r2.cloudflarestorage.com
+      BUCKET: ffxi-resources
+      R2_KEY_ID: ${{ secrets.RESOURCES_BUCKET_KEY_ID }}
+      R2_APP_KEY: ${{ secrets.RESOURCES_BUCKET_APP_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q boto3
+      - run: python3 scripts/r2_upload.py drop-copies ${{ inputs.dry_run && '--dry-run' || '' }}
