@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   # Nothing is published from a commit whose tests fail.
@@ -17,6 +16,16 @@ jobs:
   sync:
     needs: test
     runs-on: ubuntu-latest
+    # Publishing rebuilds versions.json; one writer at a time, with backfill's finalize.
+    concurrency:
+      group: r2-index-rebuild
+      cancel-in-progress: false
+    env:
+      ENDPOINT: https://5ab2e190b7cfef75dcbfebcf15b14352.r2.cloudflarestorage.com
+      BUCKET: ffxi-resources
+      R2_KEY_ID: ${{ secrets.RESOURCES_BUCKET_KEY_ID }}
+      R2_APP_KEY: ${{ secrets.RESOURCES_BUCKET_APP_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +35,7 @@ jobs:
 
       # Always pull the latest xi-events HEAD even if pip has a cached wheel for the URL
       - run: pip install --no-cache-dir --upgrade --force-reinstall --no-deps git+https://github.com/sruon/xi-events-py.git
-      - run: pip install -e .
+      - run: pip install -e . boto3
 
       - name: Build DAT file list
         run: |
@@ -44,35 +53,33 @@ jobs:
           BUCKET_KEY_ID: ${{ secrets.BUCKET_KEY_ID }}
           BUCKET_APP_KEY: ${{ secrets.BUCKET_APP_KEY }}
 
+      # Done only when R2 and the GitHub release both have the version, so a run that stopped
+      # halfway is finished by the next one.
+      - name: Check whether the version is published
+        id: check
+        env:
+          VERSION: ${{ steps.ffxi.outputs.version }}
+        run: |
+          if python3 scripts/r2_upload.py published "$VERSION" && gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run all dump scripts
+        if: steps.check.outputs.done == 'false'
         run: python3 scripts/run_all.py dump --version "${{ steps.ffxi.outputs.version }}" --base-path dat --output-dir dist
 
-      - name: Check for existing release
-        id: check
+      - name: Publish to R2
+        if: steps.check.outputs.done == 'false'
         run: |
-          VERSION="${{ steps.ffxi.outputs.version }}"
-          if gh release view "$VERSION" > /dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          python3 scripts/r2_upload.py publish "${{ steps.ffxi.outputs.version }}" dist
+          python3 scripts/r2_upload.py rebuild-index
 
-      - name: Create release
-        if: steps.check.outputs.exists == 'false'
+      - name: Publish the GitHub release
+        if: steps.check.outputs.done == 'false'
+        env:
+          VERSION: ${{ steps.ffxi.outputs.version }}
         run: |
-          VERSION="${{ steps.ffxi.outputs.version }}"
-          gh release create "$VERSION" \
-            --title "$VERSION" \
-            --notes "Automated dump for FFXI version $VERSION" \
-            dist/*
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Releases made with GITHUB_TOKEN start no workflows, but a dispatch does.
-      - name: Upload to R2
-        if: steps.check.outputs.exists == 'false'
-        run: gh workflow run upload-r2.yml -f tag="${{ steps.ffxi.outputs.version }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh release view "$VERSION" > /dev/null 2>&1 || gh release create "$VERSION" --title "$VERSION" --notes "Automated dump for FFXI version $VERSION"
+          gh release upload "$VERSION" dist/* --clobber

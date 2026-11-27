@@ -1,11 +1,12 @@
-"""R2 upload helpers used by upload-r2.yml and backfill.yml.
+"""Publish dumps to R2, used by sync.yml and backfill.yml. Layout: docs/BUCKET.md.
 
 Two subcommands:
 
-  upload-version <version> <dist_dir>
-    Uploads every file in <dist_dir> to versions/<version>/<filename> and
-    writes versions/<version>/manifest.json. No global state mutation.
-    Safe to run in parallel for different versions.
+  publish <version> <dist_dir>
+    Uploads <dist_dir> as an immutable revision under revisions/<version>/<revision>/, checks every
+    file, copies them to versions/<version>/ for readers of the old layout, and writes
+    versions/<version>/manifest.json last. A rerun skips files already there, so a stopped
+    publish resumes. Safe to run in parallel for different versions.
 
   rebuild-index
     Lists versions/*/manifest.json on the bucket, reads each, and writes a
@@ -14,8 +15,11 @@ Two subcommands:
     manifest cannot be read or parsed, it fails and leaves versions.json
     as it was.
 
+  published <version>
+    Exits 0 when versions/<version>/manifest.json exists, 1 when it does not.
+
 Reads the same env vars as the workflow steps:
-  ENDPOINT, BUCKET, R2_KEY_ID, R2_APP_KEY
+  ENDPOINT, BUCKET, R2_KEY_ID, R2_APP_KEY; GITHUB_SHA when set
 """
 
 from __future__ import annotations
@@ -26,10 +30,15 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
+
+IMMUTABLE = "public, max-age=31536000, immutable"
+SHORT = "public, max-age=300"
+GENERATORS = ("xi-events", "xi-tinkerer", "pyarrow")
 
 
 def _client():
@@ -50,36 +59,89 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def upload_version(version: str, dist_dir: Path) -> None:
+def _package(name: str) -> str | None:
+    """A generator's version, or its git commit when installed from git."""
+    try:
+        dist = metadata.distribution(name)
+    except metadata.PackageNotFoundError:
+        return None
+    commit = json.loads(dist.read_text("direct_url.json") or "{}").get("vcs_info", {}).get("commit_id")
+    return f"git {commit}" if commit else dist.version
+
+
+def revision_of(files: dict) -> str:
+    lines = "".join(f"{name} {info['sha256']}\n" for name, info in sorted(files.items()))
+    return hashlib.sha256(lines.encode()).hexdigest()[:12]
+
+
+def _head(s3, bucket: str, key: str) -> dict | None:
+    """The object's metadata, or None when it does not exist."""
+    try:
+        return s3.head_object(Bucket=bucket, Key=key).get("Metadata", {})
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
+def _stored_sha256(s3, bucket: str, key: str) -> str | None:
+    return (_head(s3, bucket, key) or {}).get("sha256")
+
+
+def publish(version: str, dist_dir: Path) -> str:
     bucket = os.environ["BUCKET"]
     s3 = _client()
 
+    files = {p.name: {"size": p.stat().st_size, "sha256": _sha256(p)} for p in sorted(dist_dir.iterdir()) if p.is_file()}
+    if not files:
+        raise SystemExit(f"{dist_dir} is empty; nothing to publish")
+    revision = revision_of(files)
+    base = f"revisions/{version}/{revision}/"
     manifest = {
         "version": version,
+        "revision": revision,
+        "base": base,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "files": {},
+        "source": {"commit": os.environ.get("GITHUB_SHA"), "packages": {n: _package(n) for n in GENERATORS}},
+        "files": files,
     }
-    for p in sorted(dist_dir.iterdir()):
-        if not p.is_file():
+
+    uploaded = 0
+    for name, info in files.items():
+        key = base + name
+        if _stored_sha256(s3, bucket, key) == info["sha256"]:
             continue
-        manifest["files"][p.name] = {"size": p.stat().st_size, "sha256": _sha256(p)}
-
-    for name in manifest["files"]:
-        key = f"versions/{version}/{name}"
         print(f"  PUT {key}", flush=True)
-        s3.upload_file(
-            str(dist_dir / name), bucket, key,
-            ExtraArgs={"CacheControl": "public, max-age=300"},
-        )
+        s3.upload_file(str(dist_dir / name), bucket, key, ExtraArgs={"CacheControl": IMMUTABLE, "Metadata": {"sha256": info["sha256"]}})
+        if _stored_sha256(s3, bucket, key) != info["sha256"]:
+            raise SystemExit(f"{key} does not match its hash after upload")
+        uploaded += 1
 
-    s3.put_object(
-        Bucket=bucket,
-        Key=f"versions/{version}/manifest.json",
-        Body=json.dumps(manifest, indent=2).encode(),
-        ContentType="application/json",
-        CacheControl="public, max-age=300",
-    )
-    print(f"Uploaded {len(manifest['files'])} files for version {version}", flush=True)
+    # The revision's manifest is written once; a rerun points the version at that same manifest.
+    if _head(s3, bucket, base + "manifest.json") is None:
+        body = json.dumps(manifest, indent=2).encode()
+        s3.put_object(Bucket=bucket, Key=base + "manifest.json", Body=body, ContentType="application/json", CacheControl=IMMUTABLE)
+    else:
+        body = s3.get_object(Bucket=bucket, Key=base + "manifest.json")["Body"].read()
+
+    # Copies for readers of the old layout. They are rewritten in place, so those readers can still
+    # see a mix mid-publish; they go once every consumer reads `base`.
+    for name, info in files.items():
+        s3.copy_object(
+            Bucket=bucket,
+            Key=f"versions/{version}/{name}",
+            CopySource={"Bucket": bucket, "Key": base + name},
+            MetadataDirective="REPLACE",
+            CacheControl=SHORT,
+            Metadata={"sha256": info["sha256"]},
+        )
+    s3.put_object(Bucket=bucket, Key=f"versions/{version}/manifest.json", Body=body, ContentType="application/json", CacheControl=SHORT)
+    print(f"Published {version} as revision {revision}: {uploaded} of {len(files)} files uploaded", flush=True)
+    return revision
+
+
+def published(version: str) -> bool:
+    return _head(_client(), os.environ["BUCKET"], f"versions/{version}/manifest.json") is not None
 
 
 def rebuild_index() -> None:
@@ -104,6 +166,7 @@ def rebuild_index() -> None:
             m = json.loads(obj["Body"].read())
             versions.append({
                 "version": m["version"],
+                "revision": m.get("revision"),
                 "published_at": m.get("generated_at"),
                 "manifest": key,
                 "file_count": len(m.get("files", {})),
@@ -127,23 +190,25 @@ def rebuild_index() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    up = sub.add_parser("upload-version", help="Upload one version's artifacts")
+    up = sub.add_parser("publish", help="Publish one version's dump as a revision")
     up.add_argument("version")
     up.add_argument("dist_dir")
 
     sub.add_parser("rebuild-index", help="Rebuild top-level versions.json")
 
+    check = sub.add_parser("published", help="Exit 0 when R2 has the version's manifest")
+    check.add_argument("version")
+
     args = parser.parse_args()
-    if args.cmd == "upload-version":
-        upload_version(args.version, Path(args.dist_dir))
+    if args.cmd == "publish":
+        publish(args.version, Path(args.dist_dir))
     elif args.cmd == "rebuild-index":
         rebuild_index()
-    else:
-        parser.print_help()
-        sys.exit(2)
+    elif args.cmd == "published":
+        sys.exit(0 if published(args.version) else 1)
 
 
 if __name__ == "__main__":

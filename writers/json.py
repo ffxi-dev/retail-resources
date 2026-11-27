@@ -7,7 +7,7 @@ from loguru import logger
 
 def write_json_gz(data: dict, path: str):
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    with gzip.open(path, "wb") as f:
+    with gzip.GzipFile(path, "wb", mtime=0) as f:  # same data, same bytes, same revision
         f.write(blob)
     logger.info("Wrote {} ({} -> {} bytes)", path, len(blob), os.path.getsize(path))
 
@@ -25,7 +25,7 @@ def write_ndjson_gz(records, path: str, meta: dict | None = None):
     or, if the path ends in `.ndjson.gz`, at `<base>.meta.json` (more conventional).
     """
     count = 0
-    with gzip.open(path, "wb") as f:
+    with gzip.GzipFile(path, "wb", mtime=0) as f:
         for rec in records:
             line = json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n"
             f.write(line.encode("utf-8"))
