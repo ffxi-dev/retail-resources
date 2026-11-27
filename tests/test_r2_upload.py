@@ -1,4 +1,5 @@
-"""scripts/r2_upload: rebuild-index publishes versions.json only when every manifest reads and parses.
+"""scripts/r2_upload: publish writes an immutable revision and resumes when stopped; rebuild-index
+publishes versions.json only when every manifest reads and parses.
 
 Run: `python -m unittest discover tests`
 """
@@ -6,7 +7,9 @@ Run: `python -m unittest discover tests`
 import io
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from botocore.exceptions import ClientError
@@ -65,6 +68,121 @@ class RebuildIndex(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(SystemExit):
                 rebuild(s3)
             self.assertEqual(s3.puts, [])
+
+
+class Store:
+    """An in-memory bucket. `fail_after` puts succeed, then the next one raises, as a stopped run."""
+
+    def __init__(self):
+        self.objects = {}  # key -> (bytes, metadata)
+        self.uploads = []
+        self.fail_after = None
+
+    def _put(self, key, body, meta):
+        if self.fail_after is not None:
+            if self.fail_after == 0:
+                raise RuntimeError("stopped")
+            self.fail_after -= 1
+        self.objects[key] = (body, meta or {})
+
+    def upload_file(self, path, Bucket, Key, ExtraArgs):
+        self.uploads.append(Key)
+        self._put(Key, Path(path).read_bytes(), ExtraArgs.get("Metadata"))
+
+    def put_object(self, Bucket, Key, Body, Metadata=None, **_):
+        self._put(Key, Body, Metadata)
+
+    def copy_object(self, Bucket, Key, CopySource, Metadata=None, **_):
+        self._put(Key, self.objects[CopySource["Key"]][0], Metadata)
+
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+        return {"Metadata": self.objects[Key][1]}
+
+    def get_object(self, Bucket, Key):
+        return {"Body": io.BytesIO(self.objects[Key][0])}
+
+    def body(self, key):
+        return json.loads(self.objects[key][0])
+
+
+def dump(files):
+    d = Path(tempfile.mkdtemp())
+    for name, data in files.items():
+        (d / name).write_bytes(data)
+    return d
+
+
+def publish(store, version, dist):
+    with mock.patch.dict(os.environ, {"BUCKET": "test"}), mock.patch.object(r2_upload, "_client", return_value=store):
+        return r2_upload.publish(version, dist)
+
+
+V = "30261102_1"
+OLD = {"items.parquet": b"old items", "items.meta.json": b"{}"}
+NEW = {"items.parquet": b"new items", "items.meta.json": b"{}"}
+
+
+class Publish(unittest.TestCase):
+    def test_writes_a_revision_and_points_the_version_at_it(self):
+        s = Store()
+        rev = publish(s, V, dump(OLD))
+        pointer = s.body(f"versions/{V}/manifest.json")
+        self.assertEqual(pointer["revision"], rev)
+        self.assertEqual(pointer["base"], f"revisions/{V}/{rev}/")
+        self.assertEqual(s.objects[f"revisions/{V}/{rev}/items.parquet"][0], b"old items")
+        self.assertEqual(s.objects[f"versions/{V}/items.parquet"][0], b"old items")
+        self.assertEqual(s.body(f"revisions/{V}/{rev}/manifest.json"), pointer)
+        self.assertIn("xi-events", pointer["source"]["packages"])
+
+    def test_same_bytes_upload_nothing_and_keep_the_manifest(self):
+        s = Store()
+        rev = publish(s, V, dump(OLD))
+        first = s.body(f"versions/{V}/manifest.json")
+        s.uploads.clear()
+        self.assertEqual(publish(s, V, dump(OLD)), rev)
+        self.assertEqual(s.uploads, [])
+        self.assertEqual(s.body(f"versions/{V}/manifest.json"), first)
+
+    def test_a_backfill_leaves_the_old_revision_alone(self):
+        s = Store()
+        old = publish(s, V, dump(OLD))
+        new = publish(s, V, dump(NEW))
+        self.assertNotEqual(old, new)
+        self.assertEqual(s.objects[f"revisions/{V}/{old}/items.parquet"][0], b"old items")
+        self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], new)
+
+    def test_stopped_upload_keeps_the_old_revision_then_resumes(self):
+        s = Store()
+        old = publish(s, V, dump(OLD))
+        s.fail_after = 1  # one file lands, then the run stops
+        with self.assertRaises(RuntimeError):
+            publish(s, V, dump(NEW))
+        self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], old)
+        s.fail_after = None
+        s.uploads.clear()
+        new = publish(s, V, dump(NEW))
+        self.assertEqual(len(s.uploads), 1)  # only the file the stopped run missed
+        self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], new)
+
+    def test_stopped_while_copying_resumes(self):
+        s = Store()
+        s.fail_after = len(NEW) + 1  # every revision file and its manifest land, then the copies stop
+        with self.assertRaises(RuntimeError):
+            publish(s, V, dump(NEW))
+        self.assertNotIn(f"versions/{V}/manifest.json", s.objects)
+        s.fail_after = None
+        s.uploads.clear()
+        rev = publish(s, V, dump(NEW))
+        self.assertEqual(s.uploads, [])
+        self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], rev)
+
+    def test_revision_names_the_bytes_not_the_order(self):
+        a = {"a": {"sha256": "1"}, "b": {"sha256": "2"}}
+        b = {"b": {"sha256": "2"}, "a": {"sha256": "1"}}
+        self.assertEqual(r2_upload.revision_of(a), r2_upload.revision_of(b))
+        self.assertNotEqual(r2_upload.revision_of(a), r2_upload.revision_of({**a, "b": {"sha256": "3"}}))
 
 
 if __name__ == "__main__":
