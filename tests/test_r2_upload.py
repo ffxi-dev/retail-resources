@@ -1,9 +1,11 @@
 """scripts/r2_upload: publish writes an immutable revision and resumes when stopped; rebuild-index
-publishes versions.json only when every manifest reads and parses.
+publishes versions.json only when every manifest reads and parses; drop-copies deletes the old layout's
+copies only of a version whose revision holds every file.
 
 Run: `python -m unittest discover tests`
 """
 
+import hashlib
 import io
 import json
 import os
@@ -92,8 +94,11 @@ class Store:
     def put_object(self, Bucket, Key, Body, Metadata=None, **_):
         self._put(Key, Body, Metadata)
 
-    def copy_object(self, Bucket, Key, CopySource, Metadata=None, **_):
-        self._put(Key, self.objects[CopySource["Key"]][0], Metadata)
+    def get_paginator(self, _name):
+        return mock.Mock(paginate=lambda Prefix, **_: [{"Contents": [{"Key": k} for k in sorted(self.objects) if k.startswith(Prefix)]}])
+
+    def delete_object(self, Bucket, Key):
+        del self.objects[Key]
 
     def head_object(self, Bucket, Key):
         if Key not in self.objects:
@@ -132,7 +137,7 @@ class Publish(unittest.TestCase):
         self.assertEqual(pointer["revision"], rev)
         self.assertEqual(pointer["base"], f"revisions/{V}/{rev}/")
         self.assertEqual(s.objects[f"revisions/{V}/{rev}/items.parquet"][0], b"old items")
-        self.assertEqual(s.objects[f"versions/{V}/items.parquet"][0], b"old items")
+        self.assertNotIn(f"versions/{V}/items.parquet", s.objects, "no copy in the old layout")
         self.assertEqual(s.body(f"revisions/{V}/{rev}/manifest.json"), pointer)
         self.assertIn("xi-events", pointer["source"]["packages"])
 
@@ -166,9 +171,9 @@ class Publish(unittest.TestCase):
         self.assertEqual(len(s.uploads), 1)  # only the file the stopped run missed
         self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], new)
 
-    def test_stopped_while_copying_resumes(self):
+    def test_stopped_before_the_pointer_resumes(self):
         s = Store()
-        s.fail_after = len(NEW) + 1  # every revision file and its manifest land, then the copies stop
+        s.fail_after = len(NEW) + 1  # every revision file and its manifest land, then the run stops
         with self.assertRaises(RuntimeError):
             publish(s, V, dump(NEW))
         self.assertNotIn(f"versions/{V}/manifest.json", s.objects)
@@ -177,6 +182,24 @@ class Publish(unittest.TestCase):
         rev = publish(s, V, dump(NEW))
         self.assertEqual(s.uploads, [])
         self.assertEqual(s.body(f"versions/{V}/manifest.json")["revision"], rev)
+
+    def test_drop_copies_keeps_a_version_its_revision_does_not_hold(self):
+        s = Store()
+        rev = publish(s, V, dump(OLD))
+        legacy = "30260401_0"  # published before revisions: copies and a manifest without base
+        s.objects[f"versions/{legacy}/items.parquet"] = (b"x", {})
+        s.objects[f"versions/{legacy}/manifest.json"] = (json.dumps({"version": legacy, "files": {"items.parquet": {"sha256": "1"}}}).encode(), {})
+        s.objects[f"versions/{V}/items.parquet"] = (b"old items", {})  # a copy publish once wrote
+        s.objects[f"versions/{V}/items.meta.json"] = (b"{}", {})
+        with mock.patch.dict(os.environ, {"BUCKET": "test"}), mock.patch.object(r2_upload, "_client", return_value=s):
+            self.assertEqual(r2_upload.drop_copies(dry_run=True), 2)
+            self.assertIn(f"versions/{V}/items.parquet", s.objects, "a dry run deletes nothing")
+            del s.objects[f"revisions/{V}/{rev}/items.meta.json"]
+            self.assertEqual(r2_upload.drop_copies(dry_run=False), 0, "the revision lacks a file: keep the copies")
+            s.objects[f"revisions/{V}/{rev}/items.meta.json"] = (b"{}", {"sha256": hashlib.sha256(b"{}").hexdigest()})
+            self.assertEqual(r2_upload.drop_copies(dry_run=False), 2)
+        self.assertEqual(sorted(k for k in s.objects if k.startswith("versions/")),
+                         [f"versions/{legacy}/items.parquet", f"versions/{legacy}/manifest.json", f"versions/{V}/manifest.json"])
 
     def test_revision_names_the_bytes_not_the_order(self):
         a = {"a": {"sha256": "1"}, "b": {"sha256": "2"}}

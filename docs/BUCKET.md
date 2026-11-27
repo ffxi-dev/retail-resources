@@ -11,13 +11,11 @@ No auth required. CORS allows browser access.
 ```
 ffxi-resources.sruon.dev/
 ├── versions.json                       # top-level index of all versions
-├── revisions/
-│   └── <version>/<revision>/           # one publish of a version; never rewritten
-│       ├── manifest.json
-│       └── <same files as below>
-└── versions/
-    └── <version>/                      # one directory per FFXI client version
-        ├── manifest.json               # what's in this version, and its current revision
+├── versions/
+│   └── <version>/manifest.json         # one per FFXI client version: its files and current revision
+└── revisions/
+    └── <version>/<revision>/           # one publish of a version; never rewritten
+        ├── manifest.json
         ├── items.parquet
         ├── items.ndjson.gz
         ├── items.meta.json
@@ -55,7 +53,7 @@ Top-level index. Updated on every successful release.
     },
     {
       "version": "30260401_0",
-      "revision": "8c1a0c580d71",
+      "revision": "7cdc75e8423f",
       "published_at": "2026-05-01T06:12:33+00:00",
       "manifest": "versions/30260401_0/manifest.json",
       "file_count": 32
@@ -83,8 +81,8 @@ Per-version listing with size and SHA-256 for every artifact, and the revision t
 ```json
 {
   "version": "30260401_0",
-  "revision": "8c1a0c580d71",
-  "base": "revisions/30260401_0/8c1a0c580d71/",
+  "revision": "7cdc75e8423f",
+  "base": "revisions/30260401_0/7cdc75e8423f/",
   "generated_at": "2026-05-01T06:12:33+00:00",
   "source": {
     "commit": "95a8618…",
@@ -117,29 +115,32 @@ A version is republished when its data is corrected (a backfill). Each publish w
 
 `revisions/<version>/<revision>/` holds one publish: the files and the manifest. They are never rewritten. Cache-Control: one year, `immutable`. Key any cache on the revision, not the version.
 
-`versions/<version>/<file>` holds a copy of the current revision's files, for readers that predate revisions. A republish rewrites them in place, so a reader can see old and new files mixed for a few minutes. Cache-Control: 300 seconds.
+`versions/<version>/` holds only the manifest. It once held a copy of each file too; read files through the manifest's `base`.
 
 ## Common access patterns
 
 ### Fetch the latest version directly via DuckDB
 
 ```sql
--- Resolve latest, then query items.parquet over HTTPS
-WITH latest AS (
-  SELECT json_extract_string(json, '$.latest') AS v
-  FROM read_text('https://ffxi-resources.sruon.dev/versions.json') AS t(json)
-)
+-- Find the newest version's revision, then query its items.parquet over HTTPS
+SET VARIABLE items = (
+  SELECT 'https://ffxi-resources.sruon.dev/revisions/' || v.version || '/' || v.revision || '/items.parquet'
+  FROM (SELECT unnest(versions) AS v, latest FROM read_json('https://ffxi-resources.sruon.dev/versions.json'))
+  WHERE v.version = latest
+);
 SELECT id, name.english, weapon.damage
-FROM read_parquet('https://ffxi-resources.sruon.dev/versions/' || (SELECT v FROM latest) || '/items.parquet')
+FROM read_parquet(getvariable('items'))
 WHERE category = 'weapon' AND weapon.damage > 50;
 ```
 
 ### Pin to a specific version
 
 ```
-GET https://ffxi-resources.sruon.dev/versions/30260401_0/items.parquet
-GET https://ffxi-resources.sruon.dev/versions/30260401_0/manifest.json
+GET https://ffxi-resources.sruon.dev/versions/30260401_0/manifest.json          # its base: revisions/30260401_0/7cdc75e8423f/
+GET https://ffxi-resources.sruon.dev/revisions/30260401_0/7cdc75e8423f/items.parquet
 ```
+
+A revision's URL pins the bytes too: a later backfill of the version writes a new revision and leaves this one.
 
 ### Discover versions
 
@@ -150,7 +151,7 @@ GET https://ffxi-resources.sruon.dev/versions.json
 ### Verify integrity
 
 ```sh
-curl -s https://ffxi-resources.sruon.dev/versions/30260401_0/manifest.json \
+curl -s https://ffxi-resources.sruon.dev/revisions/30260401_0/7cdc75e8423f/manifest.json \
   | jq -r '.files["items.parquet"].sha256'
 sha256sum items.parquet
 ```
