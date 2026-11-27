@@ -10,7 +10,12 @@ permissions:
   actions: write
 
 jobs:
+  # Nothing is published from a commit whose tests fail.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   sync:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
