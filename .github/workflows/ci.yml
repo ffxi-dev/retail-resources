@@ -1,0 +1,23 @@
+# The unit tests, on every pull request and push to main, and before sync and backfill publish anything (they call
+# this workflow). Design: ffxi-dev/vault openspec/changes/cross-repo-contracts/, 5.2.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e .
+      - run: python -m unittest discover tests

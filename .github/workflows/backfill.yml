@@ -21,7 +21,12 @@ permissions:
   contents: write
 
 jobs:
+  # Nothing is published from a commit whose tests fail.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   resolve:
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.list.outputs.versions }}
